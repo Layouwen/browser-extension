@@ -13,6 +13,7 @@ import type { BmFolder, BmItem } from '@/lib/types'
 import { BOOKMARKS_BAR_ID } from '@/lib/types'
 import FolderTree from '@/components/FolderTree.vue'
 import BookmarkList from '@/components/BookmarkList.vue'
+import type { BookmarkListNode } from '@/components/BookmarkList.vue'
 import BookmarkEditDialog from '@/components/BookmarkEditDialog.vue'
 import BookmarkContextMenu from '@/components/BookmarkContextMenu.vue'
 
@@ -76,34 +77,29 @@ function renderBookmarkPrefix(item: BmItem) {
     })
 }
 
-const buildTree = (parentId: string | null): TreeOption[] => {
-  const folderNodes = store.childrenOf(parentId).map((f) => ({
-    index: f.index,
-    option: {
-      key: `f:${f.id}`,
-      label: f.title,
-      children: buildTree(f.id),
-      isLeaf: false,
-    },
-  }))
-  // parentId === null 时是顶层(根),根节点是 Chrome 的 '0' 根,
-  // 它下面没有 bookmark 项,所以只在 parentId !== null 时拼接 items
-  if (parentId !== null) {
-    const bookmarkNodes = store.itemsOf(parentId).map((b) => ({
-      index: b.index,
-      option: {
-        key: `b:${b.id}`,
-        label: b.title || b.url,
-        isLeaf: true,
-        prefix: renderBookmarkPrefix(b),
-      },
-    }))
-    return [...folderNodes, ...bookmarkNodes]
-      .sort((a, b) => a.index - b.index)
-      .map(({ option }) => option)
-  }
-  return folderNodes.map(({ option }) => option)
-}
+const buildTree = (parentId: string | null): TreeOption[] =>
+  store.siblingsOf(parentId).flatMap<TreeOption>((node) => {
+    if (node.kind === 'folder') {
+      const folder = store.folderById(node.id)
+      if (!folder) return []
+      return [{
+        key: `f:${folder.id}`,
+        label: folder.title,
+        children: buildTree(folder.id),
+        isLeaf: false,
+      }]
+    }
+    if (parentId === null) return []
+    const item = store.items.find((b) => b.id === node.id)
+    return item
+      ? [{
+          key: `b:${item.id}`,
+          label: item.title || item.url,
+          isLeaf: true,
+          prefix: renderBookmarkPrefix(item),
+        }]
+      : []
+  })
 
 const treeData = computed(() => buildTree(null))
 
@@ -118,9 +114,9 @@ const isProtectedRoot = computed(
 
 const visibleItems = computed<BmItem[]>(() => {
   const kw = searchKeyword.value.trim().toLowerCase()
-  let list: BmItem[]
-  if (kw) {
-    list = store.items.filter((b) => {
+  if (!kw) return []
+  return store.items
+    .filter((b) => {
       const m = store.metaOf(b.id)
       return (
         b.title.toLowerCase().includes(kw) ||
@@ -128,12 +124,33 @@ const visibleItems = computed<BmItem[]>(() => {
         (m.note ?? '').toLowerCase().includes(kw)
       )
     })
-  } else if (selectedFolderId.value) {
-    list = store.itemsOf(selectedFolderId.value)
-  } else {
-    list = []
+    .sort((a, b) => b.dateAdded - a.dateAdded)
+})
+
+const visibleNodes = computed<BookmarkListNode[]>(() => {
+  const kw = searchKeyword.value.trim()
+  if (kw) {
+    return visibleItems.value.map((item) => ({
+      kind: 'bookmark',
+      id: item.id,
+      item,
+    }))
   }
-  return kw ? [...list].sort((a, b) => b.dateAdded - a.dateAdded) : list
+  if (!selectedFolderId.value) return []
+  return store.siblingsOf(selectedFolderId.value).flatMap<BookmarkListNode>((node) => {
+    if (node.kind === 'folder') {
+      const folder = store.folderById(node.id)
+      if (!folder) return []
+      return [{
+        kind: 'folder' as const,
+        id: folder.id,
+        folder,
+        childCount: store.siblingsOf(folder.id).length,
+      }]
+    }
+    const item = store.items.find((b) => b.id === node.id)
+    return item ? [{ kind: 'bookmark' as const, id: item.id, item }] : []
+  })
 })
 
 const canReorderVisibleItems = computed(
@@ -196,9 +213,8 @@ function promptInput(opts: {
   })
 }
 
-async function handleAddChild() {
+async function handleAddChild(parentId = selectedFolderId.value ?? BOOKMARKS_BAR_ID) {
   // 父目录:当前选中的目录,若未选则放到"书签栏"
-  const parentId = selectedFolderId.value ?? BOOKMARKS_BAR_ID
   const name = await promptInput({ title: '新建子目录', placeholder: '子目录名', okText: '创建' })
   if (!name) return
   const f = await store.addFolder(parentId, name)
@@ -209,35 +225,36 @@ async function handleAddChild() {
   message.success('已创建')
 }
 
-async function handleRename() {
-  if (!currentFolder.value) return
-  if (isProtectedRoot.value) {
+async function renameFolder(folder: BmFolder) {
+  if (folder.parentId === null) {
     message.warning('Chrome 顶级目录(书签栏 / 其他书签)不能重命名')
     return
   }
-  const cur = currentFolder.value
   const name = await promptInput({
     title: '重命名目录',
-    initial: cur.title,
+    initial: folder.title,
     placeholder: '新名称',
   })
   if (!name) return
-  await store.renameFolder(cur.id, name)
+  await store.renameFolder(folder.id, name)
   message.success('已重命名')
 }
 
-function handleDeleteFolder() {
+async function handleRename() {
   if (!currentFolder.value) return
-  if (isProtectedRoot.value) {
+  await renameFolder(currentFolder.value)
+}
+
+function deleteFolder(folder: BmFolder) {
+  if (folder.parentId === null) {
     message.warning('Chrome 顶级目录(书签栏 / 其他书签)不能删除')
     return
   }
-  const cur = currentFolder.value
   const count =
-    store.items.filter((b) => b.parentId === cur.id).length +
-    store.folders.filter((f) => f.parentId === cur.id).length
+    store.items.filter((b) => b.parentId === folder.id).length +
+    store.folders.filter((f) => f.parentId === folder.id).length
   dialog.warning({
-    title: `删除「${cur.title}」?`,
+    title: `删除「${folder.title}」?`,
     content:
       count > 0
         ? `该目录下还有 ${count} 项内容,将一并从浏览器收藏夹删除,不可撤销。`
@@ -245,14 +262,21 @@ function handleDeleteFolder() {
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: async () => {
-      await store.deleteFolder(cur.id)
-      const fallback =
-        store.folderById(BOOKMARKS_BAR_ID)?.id ?? store.rootFolders[0]?.id ?? null
-      selectedFolderId.value = fallback
-      selectedKey.value = fallback ? `f:${fallback}` : null
+      await store.deleteFolder(folder.id)
+      if (selectedFolderId.value === folder.id) {
+        const fallback =
+          store.folderById(BOOKMARKS_BAR_ID)?.id ?? store.rootFolders[0]?.id ?? null
+        selectedFolderId.value = fallback
+        selectedKey.value = fallback ? `f:${fallback}` : null
+      }
       message.success('已删除')
     },
   })
+}
+
+function handleDeleteFolder() {
+  if (!currentFolder.value) return
+  deleteFolder(currentFolder.value)
 }
 
 function handleEdit(item: BmItem) {
@@ -298,6 +322,14 @@ function handleTreeSelectFolder(id: string) {
   selectedFolderId.value = id
 }
 
+function openFolder(folder: BmFolder) {
+  selectedFolderId.value = folder.id
+  selectedKey.value = `f:${folder.id}`
+  if (!expandedKeys.value.includes(`f:${folder.id}`)) {
+    expandedKeys.value.push(`f:${folder.id}`)
+  }
+}
+
 function handleTreeOpenBookmark(id: string) {
   const item = store.items.find((b) => b.id === id)
   if (item) handleOpen(item)
@@ -334,25 +366,78 @@ function isFolderDescendant(folderId: string, possibleDescendantId: string): boo
 }
 
 function childCount(parentId: string): number {
-  return (
-    store.childrenOf(parentId).length +
-    store.items.filter((b) => b.parentId === parentId).length
-  )
+  return store.siblingsOf(parentId).length
 }
 
-function adjustedMoveIndex(
-  drag: BookmarkNodeRef,
+function chromeMoveIndex(
+  oldParentId: string | null,
+  oldIndex: number,
   targetParentId: string,
-  rawIndex: number
+  desiredFinalIndex: number
 ): number {
-  if (drag.parentId === targetParentId && drag.index < rawIndex) return rawIndex - 1
-  return rawIndex
+  if (oldParentId === targetParentId && oldIndex < desiredFinalIndex) {
+    return desiredFinalIndex + 1
+  }
+  return desiredFinalIndex
 }
 
-async function moveNode(drag: BookmarkNodeRef, parentId: string, rawIndex: number) {
-  const index = adjustedMoveIndex(drag, parentId, rawIndex)
+async function moveNodeToIndex(
+  drag: BookmarkNodeRef,
+  parentId: string,
+  desiredFinalIndex: number
+) {
+  const index = chromeMoveIndex(drag.parentId, drag.index, parentId, desiredFinalIndex)
   if (drag.kind === 'folder') await store.moveFolder(drag.id, parentId, index)
   else await store.moveBookmark(drag.id, parentId, index)
+}
+
+function canMoveNode(drag: BookmarkNodeRef, target: BookmarkNodeRef | null): boolean {
+  if (drag.kind === 'folder' && drag.parentId === null) {
+    message.warning('Chrome 顶级目录不能移动')
+    return false
+  }
+  if (
+    drag.kind === 'folder' &&
+    target?.kind === 'folder' &&
+    (drag.id === target.id || isFolderDescendant(drag.id, target.id))
+  ) {
+    message.warning('不能把目录移动到自身或子目录中')
+    return false
+  }
+  return true
+}
+
+async function moveNodeInside(drag: BookmarkNodeRef, targetFolder: BookmarkNodeRef) {
+  if (targetFolder.kind !== 'folder') return
+  if (!canMoveNode(drag, targetFolder)) return
+  const desiredFinalIndex =
+    drag.parentId === targetFolder.id
+      ? Math.max(0, childCount(targetFolder.id) - 1)
+      : childCount(targetFolder.id)
+  await moveNodeToIndex(drag, targetFolder.id, desiredFinalIndex)
+  if (!expandedKeys.value.includes(`f:${targetFolder.id}`)) {
+    expandedKeys.value.push(`f:${targetFolder.id}`)
+  }
+  message.success('已移动')
+}
+
+async function moveNodeRelative(
+  drag: BookmarkNodeRef,
+  target: BookmarkNodeRef,
+  position: 'before' | 'after'
+) {
+  if (!canMoveNode(drag, target)) return
+  if (target.parentId === null) {
+    message.warning('Chrome 顶级目录的位置不能调整')
+    return
+  }
+  const siblings = store.siblingsOf(target.parentId)
+  const nextIds = siblings.map((node) => node.id).filter((id) => id !== drag.id)
+  const targetIndex = nextIds.indexOf(target.id)
+  if (targetIndex === -1) return
+  const desiredFinalIndex = position === 'before' ? targetIndex : targetIndex + 1
+  await moveNodeToIndex(drag, target.parentId, desiredFinalIndex)
+  message.success('已移动')
 }
 
 async function handleTreeDropNode(
@@ -364,61 +449,29 @@ async function handleTreeDropNode(
   const target = nodeRefFromKey(targetKey)
   if (!drag || !target || drag.id === target.id) return
 
-  if (drag.kind === 'folder' && drag.parentId === null) {
-    message.warning('Chrome 顶级目录不能移动')
-    return
-  }
-
   if (position === 'inside') {
-    if (target.kind !== 'folder') return
-    if (
-      drag.kind === 'folder' &&
-      (drag.id === target.id || isFolderDescendant(drag.id, target.id))
-    ) {
-      message.warning('不能把目录移动到自身或子目录中')
-      return
-    }
-    await moveNode(drag, target.id, childCount(target.id))
-    if (!expandedKeys.value.includes(`f:${target.id}`)) {
-      expandedKeys.value.push(`f:${target.id}`)
-    }
-    message.success('已移动')
+    await moveNodeInside(drag, target)
     return
   }
 
-  if (target.parentId === null) {
-    message.warning('Chrome 顶级目录的位置不能调整')
-    return
-  }
-  if (
-    drag.kind === 'folder' &&
-    target.kind === 'folder' &&
-    isFolderDescendant(drag.id, target.id)
-  ) {
-    message.warning('不能把目录移动到自身或子目录中')
-    return
-  }
-  const rawIndex = position === 'before' ? target.index : target.index + 1
-  await moveNode(drag, target.parentId, rawIndex)
-  message.success('已移动')
+  await moveNodeRelative(drag, target, position)
 }
 
-async function handleBookmarkReorder(
-  dragId: string,
-  targetId: string,
-  position: 'before' | 'after'
+async function handleListReorder(
+  dragKey: string,
+  targetKey: string,
+  position: DropPosition
 ) {
-  if (!canReorderVisibleItems.value || dragId === targetId) return
-  const drag = store.items.find((b) => b.id === dragId)
-  const target = store.items.find((b) => b.id === targetId)
-  if (!drag || !target || drag.parentId !== target.parentId) return
-  const rawIndex = position === 'before' ? target.index : target.index + 1
-  await store.moveBookmark(drag.id, target.parentId, adjustedMoveIndex(
-    { kind: 'bookmark', id: drag.id, parentId: drag.parentId, index: drag.index },
-    target.parentId,
-    rawIndex
-  ))
-  message.success('已排序')
+  if (!canReorderVisibleItems.value || dragKey === targetKey) return
+  const drag = nodeRefFromKey(dragKey)
+  const target = nodeRefFromKey(targetKey)
+  if (!drag || !target) return
+  if (position === 'inside') {
+    await moveNodeInside(drag, target)
+    return
+  }
+  if (drag.parentId !== target.parentId) return
+  await moveNodeRelative(drag, target, position)
 }
 
 const renderMenuIcon = (text: string) =>
@@ -439,6 +492,7 @@ const isTreeFolderMenuTargetProtected = computed(
 )
 
 const treeFolderMenuOptions = computed<DropdownOption[]>(() => [
+  { label: '打开目录', key: 'open-folder', icon: renderMenuIcon('▣') },
   { label: '新建子目录', key: 'add-child', icon: renderMenuIcon('＋') },
   { type: 'divider', key: 'd1' },
   {
@@ -485,21 +539,33 @@ function handleTreeFolderContext(id: string, x: number, y: number) {
   })
 }
 
+function handleListFolderContext(folder: BmFolder, x: number, y: number) {
+  treeMenuVisible.value = false
+  treeFolderMenuVisible.value = false
+  requestAnimationFrame(() => {
+    treeFolderMenuTarget.value = folder
+    treeFolderMenuX.value = x
+    treeFolderMenuY.value = y
+    treeFolderMenuVisible.value = true
+  })
+}
+
 function onTreeFolderMenuSelect(key: string) {
   treeFolderMenuVisible.value = false
   const folder = treeFolderMenuTarget.value
   if (!folder) return
-  selectedFolderId.value = folder.id
-  selectedKey.value = `f:${folder.id}`
   switch (key) {
+    case 'open-folder':
+      openFolder(folder)
+      break
     case 'add-child':
-      void handleAddChild()
+      void handleAddChild(folder.id)
       break
     case 'rename':
-      void handleRename()
+      void renameFolder(folder)
       break
     case 'delete':
-      handleDeleteFolder()
+      deleteFolder(folder)
       break
   }
 }
@@ -563,19 +629,20 @@ function onTreeFolderMenuSelect(key: string) {
               <h2 class="text-[28px] leading-tight font-semibold tracking-tight m-0">
                 {{
                   searchKeyword
-                    ? `匹配 ${visibleItems.length} 项`
+                    ? `匹配 ${visibleNodes.length} 项`
                     : currentFolder?.title ?? '请选择一个目录'
                 }}
               </h2>
             </div>
-            <div class="text-sm text-tertiary">共 {{ visibleItems.length }} 条</div>
+            <div class="text-sm text-tertiary">共 {{ visibleNodes.length }} 条</div>
           </div>
 
           <BookmarkList
-            :items="visibleItems"
+            :nodes="visibleNodes"
             :meta-of="store.metaOf"
             :has-folder="!!currentFolder"
             :draggable="canReorderVisibleItems"
+            :search-mode="!!searchKeyword.trim()"
             @open="handleOpen"
             @open-new-tab="handleOpenNewTab"
             @open-new-window="handleOpenNewWindow"
@@ -583,7 +650,9 @@ function onTreeFolderMenuSelect(key: string) {
             @copy-title="(i: BmItem) => handleCopy(i.title, '标题')"
             @edit="handleEdit"
             @delete="handleDeleteBookmark"
-            @reorder="handleBookmarkReorder"
+            @open-folder="openFolder"
+            @context-folder="handleListFolderContext"
+            @reorder="handleListReorder"
           />
         </div>
       </main>

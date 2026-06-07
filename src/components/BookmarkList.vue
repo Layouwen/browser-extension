@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import type { BmItem, BookmarkMeta } from '@/lib/types'
+import type { BmFolder, BmItem, BookmarkMeta } from '@/lib/types'
 import BookmarkContextMenu from './BookmarkContextMenu.vue'
 
+export type BookmarkListNode =
+  | { kind: 'folder'; id: string; folder: BmFolder; childCount: number }
+  | { kind: 'bookmark'; id: string; item: BmItem }
+type DropPosition = 'before' | 'inside' | 'after'
+
 const props = defineProps<{
-  items: BmItem[]
+  nodes: BookmarkListNode[]
   metaOf: (id: string) => BookmarkMeta
   hasFolder: boolean
   draggable?: boolean
+  searchMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -18,8 +24,14 @@ const emit = defineEmits<{
   (e: 'copy-title', item: BmItem): void
   (e: 'edit', item: BmItem): void
   (e: 'delete', item: BmItem): void
-  (e: 'reorder', dragId: string, targetId: string, position: 'before' | 'after'): void
+  (e: 'open-folder', folder: BmFolder): void
+  (e: 'context-folder', folder: BmFolder, x: number, y: number): void
+  (e: 'reorder', dragKey: string, targetKey: string, position: DropPosition): void
 }>()
+
+function nodeKey(node: BookmarkListNode): string {
+  return `${node.kind === 'folder' ? 'f' : 'b'}:${node.id}`
+}
 
 function favicon(item: BmItem): string {
   const m = props.metaOf(item.id)
@@ -46,79 +58,95 @@ function formatDate(t: number): string {
   return `${d.getFullYear()}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}`
 }
 
-const isEmpty = computed(() => props.items.length === 0)
+const isEmpty = computed(() => props.nodes.length === 0)
 
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 const menuTarget = ref<BmItem | null>(null)
-const draggingId = ref<string | null>(null)
-const dragOverId = ref<string | null>(null)
-const dragOverPosition = ref<'before' | 'after' | null>(null)
+const draggingKey = ref<string | null>(null)
+const dragOverKey = ref<string | null>(null)
+const dragOverPosition = ref<DropPosition | null>(null)
 const suppressNextClick = ref(false)
-const selectedId = ref<string | null>(null)
+const selectedKey = ref<string | null>(null)
 
-function onContextMenu(e: MouseEvent, item: BmItem) {
+function onContextMenu(e: MouseEvent, node: BookmarkListNode) {
   e.preventDefault()
-  selectedId.value = item.id
+  selectedKey.value = nodeKey(node)
+  if (node.kind === 'folder') {
+    emit('context-folder', node.folder, e.clientX, e.clientY)
+    return
+  }
   menuVisible.value = false
   nextTick(() => {
-    menuTarget.value = item
+    menuTarget.value = node.item
     menuX.value = e.clientX
     menuY.value = e.clientY
     menuVisible.value = true
   })
 }
 
-function onDragStart(e: DragEvent, item: BmItem) {
+function onDragStart(e: DragEvent, node: BookmarkListNode) {
   if (!props.draggable) return
-  draggingId.value = item.id
+  const key = nodeKey(node)
+  draggingKey.value = key
   suppressNextClick.value = true
-  e.dataTransfer?.setData('text/plain', item.id)
+  e.dataTransfer?.setData('text/plain', key)
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
 
-function onDragOver(e: DragEvent, item: BmItem) {
-  if (!props.draggable || !draggingId.value || draggingId.value === item.id) return
+function onDragOver(e: DragEvent, node: BookmarkListNode) {
+  const key = nodeKey(node)
+  if (!props.draggable || !draggingKey.value || draggingKey.value === key) return
   e.preventDefault()
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  dragOverId.value = item.id
-  dragOverPosition.value = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  const y = e.clientY - rect.top
+  dragOverKey.value = key
+  if (node.kind === 'folder' && y > rect.height / 3 && y < (rect.height * 2) / 3) {
+    dragOverPosition.value = 'inside'
+  } else {
+    dragOverPosition.value = y < rect.height / 2 ? 'before' : 'after'
+  }
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
 }
 
 function clearDragState() {
-  draggingId.value = null
-  dragOverId.value = null
+  draggingKey.value = null
+  dragOverKey.value = null
   dragOverPosition.value = null
 }
 
-function onDrop(e: DragEvent, item: BmItem) {
-  if (!props.draggable || !draggingId.value || !dragOverPosition.value) return
+function onDrop(e: DragEvent, node: BookmarkListNode) {
+  if (!props.draggable || !draggingKey.value || !dragOverPosition.value) return
   e.preventDefault()
-  const dragId = draggingId.value
+  const dragKey = draggingKey.value
+  const targetKey = nodeKey(node)
   const position = dragOverPosition.value
   clearDragState()
-  if (dragId !== item.id) emit('reorder', dragId, item.id, position)
+  if (dragKey !== targetKey) emit('reorder', dragKey, targetKey, position)
 }
 
-function onDragLeave(item: BmItem) {
-  if (dragOverId.value !== item.id) return
-  dragOverId.value = null
+function onDragLeave(node: BookmarkListNode) {
+  if (dragOverKey.value !== nodeKey(node)) return
+  dragOverKey.value = null
   dragOverPosition.value = null
 }
 
-function onItemClick(item: BmItem) {
+function onItemClick(node: BookmarkListNode) {
   if (suppressNextClick.value) {
     suppressNextClick.value = false
     return
   }
-  selectedId.value = item.id
+  selectedKey.value = nodeKey(node)
 }
 
-function onItemDblclick(item: BmItem) {
-  selectedId.value = item.id
-  emit('open', item)
+function onItemDblclick(node: BookmarkListNode) {
+  selectedKey.value = nodeKey(node)
+  if (node.kind === 'folder') {
+    emit('open-folder', node.folder)
+  } else {
+    emit('open', node.item)
+  }
 }
 </script>
 
@@ -127,10 +155,14 @@ function onItemDblclick(item: BmItem) {
     v-if="isEmpty"
     class="border border-dashed border-subtle rounded-2xl py-20 text-center text-muted bg-subtle"
   >
-    <div class="text-4xl mb-3">🗂</div>
+    <div class="text-4xl mb-3">▣</div>
     <div class="text-sm px-6">
       <template v-if="hasFolder">
-        该目录还没有收藏。点击浏览器工具栏的图标即可保存当前页面。
+        {{
+          searchMode
+            ? '没有匹配的收藏。'
+            : '该目录还没有内容。点击浏览器工具栏的图标即可保存当前页面。'
+        }}
       </template>
       <template v-else>请在左侧选择或新建一个目录</template>
     </div>
@@ -138,63 +170,90 @@ function onItemDblclick(item: BmItem) {
 
   <div v-else class="grid grid-cols-1 gap-2">
     <div
-      v-for="item in items"
-      :key="item.id"
+      v-for="node in nodes"
+      :key="nodeKey(node)"
       :draggable="draggable"
       class="group flex items-center gap-3 px-4 py-3 bg-surface rounded-xl border border-subtle hover:border-strong hover:shadow-sm transition cursor-pointer"
       :class="{
-        'opacity-50': draggingId === item.id,
-        'border-strong shadow-sm bg-subtle': selectedId === item.id,
-        'border-strong shadow-sm': dragOverId === item.id,
-        'ring-2 ring-[var(--accent)] ring-offset-0': dragOverId === item.id && dragOverPosition,
+        'opacity-50': draggingKey === nodeKey(node),
+        'border-strong shadow-sm bg-subtle': selectedKey === nodeKey(node),
+        'border-strong shadow-sm': dragOverKey === nodeKey(node),
+        'ring-2 ring-[var(--accent)] ring-offset-0': dragOverKey === nodeKey(node) && dragOverPosition,
       }"
-      @click="onItemClick(item)"
-      @dblclick="onItemDblclick(item)"
-      @contextmenu="onContextMenu($event, item)"
-      @dragstart="onDragStart($event, item)"
-      @dragover="onDragOver($event, item)"
-      @dragleave="onDragLeave(item)"
-      @drop="onDrop($event, item)"
+      @click="onItemClick(node)"
+      @dblclick="onItemDblclick(node)"
+      @contextmenu="onContextMenu($event, node)"
+      @dragstart="onDragStart($event, node)"
+      @dragover="onDragOver($event, node)"
+      @dragleave="onDragLeave(node)"
+      @drop="onDrop($event, node)"
       @dragend="clearDragState"
     >
       <div
         class="w-8 h-8 rounded-md bg-subtle flex items-center justify-center overflow-hidden shrink-0"
       >
-        <img
-          v-if="favicon(item)"
-          :src="favicon(item)"
-          class="w-5 h-5"
-          referrerpolicy="no-referrer"
-          alt=""
-        />
-        <span v-else class="text-xs text-muted">🔗</span>
+        <template v-if="node.kind === 'folder'">
+          <span class="text-sm text-secondary">▣</span>
+        </template>
+        <template v-else>
+          <img
+            v-if="favicon(node.item)"
+            :src="favicon(node.item)"
+            class="w-5 h-5"
+            referrerpolicy="no-referrer"
+            alt=""
+          />
+          <span v-else class="text-xs text-muted">↗</span>
+        </template>
       </div>
 
       <div class="flex-1 min-w-0">
-        <div class="font-medium text-[14px] truncate text-primary">{{ item.title || item.url }}</div>
-        <div class="text-[12px] text-tertiary truncate mt-0.5">{{ item.url }}</div>
-        <div
-          v-if="metaOf(item.id).note"
-          class="text-[12px] text-secondary mt-1 line-clamp-2"
-        >
-          {{ metaOf(item.id).note }}
-        </div>
+        <template v-if="node.kind === 'folder'">
+          <div class="font-medium text-[14px] truncate text-primary">
+            {{ node.folder.title || '未命名目录' }}
+          </div>
+          <div class="text-[12px] text-tertiary truncate mt-0.5">
+            {{ node.childCount }} 项
+          </div>
+        </template>
+        <template v-else>
+          <div class="font-medium text-[14px] truncate text-primary">
+            {{ node.item.title || node.item.url }}
+          </div>
+          <div class="text-[12px] text-tertiary truncate mt-0.5">{{ node.item.url }}</div>
+          <div
+            v-if="metaOf(node.item.id).note"
+            class="text-[12px] text-secondary mt-1 line-clamp-2"
+          >
+            {{ metaOf(node.item.id).note }}
+          </div>
+        </template>
       </div>
 
       <div class="text-[11px] text-muted shrink-0 w-20 text-right">
-        {{ formatDate(item.dateAdded) }}
+        {{ node.kind === 'folder' ? '' : formatDate(node.item.dateAdded) }}
       </div>
 
       <div
         class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition"
         @click.stop
       >
-        <n-button quaternary size="tiny" @click="emit('edit', item)">
-          编辑
-        </n-button>
-        <n-button quaternary size="tiny" type="error" @click="emit('delete', item)">
-          删除
-        </n-button>
+        <template v-if="node.kind === 'folder'">
+          <n-button quaternary size="tiny" @click="emit('open-folder', node.folder)">
+            打开
+          </n-button>
+          <n-button quaternary size="tiny" @click="emit('context-folder', node.folder, $event.clientX, $event.clientY)">
+            更多
+          </n-button>
+        </template>
+        <template v-else>
+          <n-button quaternary size="tiny" @click="emit('edit', node.item)">
+            编辑
+          </n-button>
+          <n-button quaternary size="tiny" type="error" @click="emit('delete', node.item)">
+            删除
+          </n-button>
+        </template>
       </div>
     </div>
   </div>

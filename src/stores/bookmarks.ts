@@ -4,6 +4,10 @@ import * as bm from '@/lib/bookmarks'
 import * as meta from '@/lib/meta'
 import type { BmFolder, BmItem, BookmarkMeta, MetaSchema } from '@/lib/types'
 
+export type BookmarkSibling =
+  | { kind: 'folder'; id: string; parentId: string | null; index: number }
+  | { kind: 'bookmark'; id: string; parentId: string; index: number }
+
 export const useBookmarksStore = defineStore('bookmarks', () => {
   const folders = ref<BmFolder[]>([])
   const items = ref<BmItem[]>([])
@@ -52,20 +56,42 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
   const folderById = (id: string) => folders.value.find((f) => f.id === id)
   const itemsOf = (folderId: string) =>
     items.value.filter((b) => b.parentId === folderId).sort((a, b) => a.index - b.index)
+  const siblingsOf = (parentId: string | null): BookmarkSibling[] => [
+    ...folders.value
+      .filter((f) => f.parentId === parentId)
+      .map((f) => ({
+        kind: 'folder' as const,
+        id: f.id,
+        parentId: f.parentId,
+        index: f.index,
+      })),
+    ...items.value
+      .filter((b) => b.parentId === parentId)
+      .map((b) => ({
+        kind: 'bookmark' as const,
+        id: b.id,
+        parentId: b.parentId,
+        index: b.index,
+      })),
+  ].sort((a, b) => a.index - b.index)
   const metaOf = (id: string): BookmarkMeta => metaMap.value[id] ?? { tags: [] }
 
   // ---------- mutations(操作浏览器原生书签) ----------
 
   async function addFolder(parentId: string | null, title: string) {
-    return bm.createFolder(parentId, title.trim() || '未命名')
+    const node = await bm.createFolder(parentId, title.trim() || '未命名')
+    await refresh()
+    return node
   }
 
   async function renameFolder(id: string, title: string) {
-    return bm.rename(id, title.trim() || '未命名')
+    await bm.rename(id, title.trim() || '未命名')
+    await refresh()
   }
 
   async function moveFolder(id: string, newParentId: string, index?: number) {
-    return bm.move(id, newParentId, index)
+    await bm.move(id, newParentId, index)
+    await refresh()
   }
 
   async function deleteFolder(id: string) {
@@ -73,6 +99,7 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     const toDelete = collectDescendantIds(id)
     await bm.removeNode(id, true)
     await meta.deleteMeta(toDelete)
+    await refresh()
   }
 
   function collectDescendantIds(folderId: string): string[] {
@@ -106,6 +133,7 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
         tags: input.tags ?? [],
       })
     }
+    await refresh()
     return node
   }
 
@@ -128,15 +156,18 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
         ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
       })
     }
+    await refresh()
   }
 
   async function deleteBookmark(id: string) {
     await bm.removeNode(id, false)
     await meta.deleteMeta([id])
+    await refresh()
   }
 
   async function moveBookmark(id: string, parentId: string, index?: number) {
-    return bm.move(id, parentId, index)
+    await bm.move(id, parentId, index)
+    await refresh()
   }
 
   return {
@@ -150,6 +181,7 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     childrenOf,
     folderById,
     itemsOf,
+    siblingsOf,
     metaOf,
     addFolder,
     renameFolder,
