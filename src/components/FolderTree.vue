@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { TreeOption } from 'naive-ui'
 
+type DropPosition = 'before' | 'inside' | 'after'
+
 defineProps<{
   data: TreeOption[]
   selected: string | null
@@ -16,6 +18,7 @@ const emit = defineEmits<{
   (e: 'open-bookmark', id: string): void
   (e: 'context-bookmark', id: string, x: number, y: number): void
   (e: 'context-folder', id: string, x: number, y: number): void
+  (e: 'drop-node', dragKey: string, targetKey: string, position: DropPosition): void
   (e: 'add-child'): void
   (e: 'rename'): void
   (e: 'delete'): void
@@ -30,18 +33,35 @@ function onSelect(keys: Array<string | number>) {
   emit('update:selected', k)
   if (k.startsWith('f:')) {
     emit('select-folder', k.slice(2))
-  } else if (k.startsWith('b:')) {
-    emit('open-bookmark', k.slice(2))
   }
 }
 
-// 点目录:展开/收起;点书签:走默认(触发 selected → 上面 onSelect 负责打开)
+// 点目录:展开/收起;点书签:走默认选中,双击再打开
 function overrideDefaultNodeClickBehavior({ option }: { option: TreeOption }) {
   const key = option.key
   if (typeof key === 'string' && key.startsWith('f:')) {
     return 'toggleExpand' as const
   }
   return 'default' as const
+}
+
+function allowDrop({ node, dropPosition }: { node: TreeOption; dropPosition: DropPosition }) {
+  const key = node.key
+  if (typeof key !== 'string') return false
+  return dropPosition === 'inside' ? key.startsWith('f:') : true
+}
+
+function onDrop({
+  node,
+  dragNode,
+  dropPosition,
+}: {
+  node: TreeOption
+  dragNode: TreeOption
+  dropPosition: DropPosition
+}) {
+  if (typeof node.key !== 'string' || typeof dragNode.key !== 'string') return
+  emit('drop-node', dragNode.key, node.key, dropPosition)
 }
 
 function nodeProps({ option }: { option: TreeOption }) {
@@ -57,13 +77,25 @@ function nodeProps({ option }: { option: TreeOption }) {
         emit('update:selected', key)
         emit('select-folder', key.slice(2))
       }
-      // 书签:让 n-tree 默认行为触发 update:selected → onSelect 里 emit open
+      // 书签:让 n-tree 默认行为触发 update:selected
+    },
+    onDblclick(e: MouseEvent) {
+      const key = option.key
+      if (typeof key !== 'string') return
+      const target = e.target as HTMLElement
+      if (target.closest('.n-tree-node-switcher')) return
+      if (key.startsWith('b:')) {
+        e.stopPropagation()
+        emit('update:selected', key)
+        emit('open-bookmark', key.slice(2))
+      }
     },
     onContextmenu(e: MouseEvent) {
       const key = option.key
       if (typeof key !== 'string') return
       e.preventDefault()
       e.stopPropagation()
+      emit('update:selected', key)
       if (key.startsWith('b:')) {
         emit('context-bookmark', key.slice(2), e.clientX, e.clientY)
       } else if (key.startsWith('f:')) {
@@ -89,14 +121,18 @@ function nodeProps({ option }: { option: TreeOption }) {
       <n-tree
         v-else
         block-node
+        draggable
         expand-on-click
+        expand-on-dragenter
         :data="data"
         :selected-keys="selected ? [selected] : []"
         :expanded-keys="expanded"
+        :allow-drop="allowDrop"
         :override-default-node-click-behavior="overrideDefaultNodeClickBehavior"
         :node-props="nodeProps"
         @update:selected-keys="onSelect"
         @update:expanded-keys="(k: string[]) => emit('update:expanded', k)"
+        @drop="onDrop"
       />
     </div>
 

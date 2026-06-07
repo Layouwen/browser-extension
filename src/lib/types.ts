@@ -7,6 +7,7 @@ export interface BmFolder {
   id: string
   parentId: string | null
   title: string
+  index: number
   dateAdded: number
   dateGroupModified?: number
 }
@@ -16,6 +17,7 @@ export interface BmItem {
   parentId: string
   title: string
   url: string
+  index: number
   dateAdded: number
 }
 

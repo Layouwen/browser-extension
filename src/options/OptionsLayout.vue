@@ -29,6 +29,11 @@ const searchKeyword = ref('')
 const editing = ref<BmItem | null>(null)
 const editorVisible = ref(false)
 
+type DropPosition = 'before' | 'inside' | 'after'
+type BookmarkNodeRef =
+  | { kind: 'folder'; id: string; parentId: string | null; index: number }
+  | { kind: 'bookmark'; id: string; parentId: string; index: number }
+
 onMounted(() => store.init())
 
 // 首次加载时,优先选中"书签栏"作为默认目录
@@ -72,28 +77,32 @@ function renderBookmarkPrefix(item: BmItem) {
 }
 
 const buildTree = (parentId: string | null): TreeOption[] => {
-  const folderNodes: TreeOption[] = store.childrenOf(parentId).map((f) => ({
-    key: `f:${f.id}`,
-    label: f.title,
-    children: buildTree(f.id),
-    isLeaf: false,
+  const folderNodes = store.childrenOf(parentId).map((f) => ({
+    index: f.index,
+    option: {
+      key: `f:${f.id}`,
+      label: f.title,
+      children: buildTree(f.id),
+      isLeaf: false,
+    },
   }))
   // parentId === null 时是顶层(根),根节点是 Chrome 的 '0' 根,
   // 它下面没有 bookmark 项,所以只在 parentId !== null 时拼接 items
   if (parentId !== null) {
-    const bookmarkNodes: TreeOption[] = store
-      .itemsOf(parentId)
-      .slice()
-      .sort((a, b) => b.dateAdded - a.dateAdded)
-      .map((b) => ({
+    const bookmarkNodes = store.itemsOf(parentId).map((b) => ({
+      index: b.index,
+      option: {
         key: `b:${b.id}`,
         label: b.title || b.url,
         isLeaf: true,
         prefix: renderBookmarkPrefix(b),
-      }))
+      },
+    }))
     return [...folderNodes, ...bookmarkNodes]
+      .sort((a, b) => a.index - b.index)
+      .map(({ option }) => option)
   }
-  return folderNodes
+  return folderNodes.map(({ option }) => option)
 }
 
 const treeData = computed(() => buildTree(null))
@@ -124,8 +133,12 @@ const visibleItems = computed<BmItem[]>(() => {
   } else {
     list = []
   }
-  return [...list].sort((a, b) => b.dateAdded - a.dateAdded)
+  return kw ? [...list].sort((a, b) => b.dateAdded - a.dateAdded) : list
 })
+
+const canReorderVisibleItems = computed(
+  () => !!selectedFolderId.value && searchKeyword.value.trim() === ''
+)
 
 const breadcrumbs = computed(() => {
   const chain: string[] = []
@@ -261,7 +274,7 @@ function handleDeleteBookmark(item: BmItem) {
 }
 
 function handleOpen(item: BmItem) {
-  chrome.tabs.update({ url: item.url })
+  chrome.tabs.create({ url: item.url, active: true })
 }
 
 function handleOpenNewTab(item: BmItem) {
@@ -287,7 +300,125 @@ function handleTreeSelectFolder(id: string) {
 
 function handleTreeOpenBookmark(id: string) {
   const item = store.items.find((b) => b.id === id)
-  if (item) chrome.tabs.update({ url: item.url })
+  if (item) handleOpen(item)
+}
+
+function parseTreeKey(key: string): { kind: 'folder' | 'bookmark'; id: string } | null {
+  if (key.startsWith('f:')) return { kind: 'folder', id: key.slice(2) }
+  if (key.startsWith('b:')) return { kind: 'bookmark', id: key.slice(2) }
+  return null
+}
+
+function nodeRefFromKey(key: string): BookmarkNodeRef | null {
+  const parsed = parseTreeKey(key)
+  if (!parsed) return null
+  if (parsed.kind === 'folder') {
+    const folder = store.folderById(parsed.id)
+    return folder
+      ? { kind: 'folder', id: folder.id, parentId: folder.parentId, index: folder.index }
+      : null
+  }
+  const item = store.items.find((b) => b.id === parsed.id)
+  return item
+    ? { kind: 'bookmark', id: item.id, parentId: item.parentId, index: item.index }
+    : null
+}
+
+function isFolderDescendant(folderId: string, possibleDescendantId: string): boolean {
+  let cur: BmFolder | null = store.folderById(possibleDescendantId) ?? null
+  while (cur?.parentId) {
+    if (cur.parentId === folderId) return true
+    cur = store.folderById(cur.parentId) ?? null
+  }
+  return false
+}
+
+function childCount(parentId: string): number {
+  return (
+    store.childrenOf(parentId).length +
+    store.items.filter((b) => b.parentId === parentId).length
+  )
+}
+
+function adjustedMoveIndex(
+  drag: BookmarkNodeRef,
+  targetParentId: string,
+  rawIndex: number
+): number {
+  if (drag.parentId === targetParentId && drag.index < rawIndex) return rawIndex - 1
+  return rawIndex
+}
+
+async function moveNode(drag: BookmarkNodeRef, parentId: string, rawIndex: number) {
+  const index = adjustedMoveIndex(drag, parentId, rawIndex)
+  if (drag.kind === 'folder') await store.moveFolder(drag.id, parentId, index)
+  else await store.moveBookmark(drag.id, parentId, index)
+}
+
+async function handleTreeDropNode(
+  dragKey: string,
+  targetKey: string,
+  position: DropPosition
+) {
+  const drag = nodeRefFromKey(dragKey)
+  const target = nodeRefFromKey(targetKey)
+  if (!drag || !target || drag.id === target.id) return
+
+  if (drag.kind === 'folder' && drag.parentId === null) {
+    message.warning('Chrome 顶级目录不能移动')
+    return
+  }
+
+  if (position === 'inside') {
+    if (target.kind !== 'folder') return
+    if (
+      drag.kind === 'folder' &&
+      (drag.id === target.id || isFolderDescendant(drag.id, target.id))
+    ) {
+      message.warning('不能把目录移动到自身或子目录中')
+      return
+    }
+    await moveNode(drag, target.id, childCount(target.id))
+    if (!expandedKeys.value.includes(`f:${target.id}`)) {
+      expandedKeys.value.push(`f:${target.id}`)
+    }
+    message.success('已移动')
+    return
+  }
+
+  if (target.parentId === null) {
+    message.warning('Chrome 顶级目录的位置不能调整')
+    return
+  }
+  if (
+    drag.kind === 'folder' &&
+    target.kind === 'folder' &&
+    isFolderDescendant(drag.id, target.id)
+  ) {
+    message.warning('不能把目录移动到自身或子目录中')
+    return
+  }
+  const rawIndex = position === 'before' ? target.index : target.index + 1
+  await moveNode(drag, target.parentId, rawIndex)
+  message.success('已移动')
+}
+
+async function handleBookmarkReorder(
+  dragId: string,
+  targetId: string,
+  position: 'before' | 'after'
+) {
+  if (!canReorderVisibleItems.value || dragId === targetId) return
+  const drag = store.items.find((b) => b.id === dragId)
+  const target = store.items.find((b) => b.id === targetId)
+  if (!drag || !target || drag.parentId !== target.parentId) return
+  const rawIndex = position === 'before' ? target.index : target.index + 1
+  await store.moveBookmark(drag.id, target.parentId, adjustedMoveIndex(
+    { kind: 'bookmark', id: drag.id, parentId: drag.parentId, index: drag.index },
+    target.parentId,
+    rawIndex
+  ))
+  message.success('已排序')
 }
 
 const renderMenuIcon = (text: string) =>
@@ -415,6 +546,7 @@ function onTreeFolderMenuSelect(key: string) {
           @open-bookmark="handleTreeOpenBookmark"
           @context-bookmark="handleTreeBookmarkContext"
           @context-folder="handleTreeFolderContext"
+          @drop-node="handleTreeDropNode"
           @add-child="handleAddChild"
           @rename="handleRename"
           @delete="handleDeleteFolder"
@@ -443,6 +575,7 @@ function onTreeFolderMenuSelect(key: string) {
             :items="visibleItems"
             :meta-of="store.metaOf"
             :has-folder="!!currentFolder"
+            :draggable="canReorderVisibleItems"
             @open="handleOpen"
             @open-new-tab="handleOpenNewTab"
             @open-new-window="handleOpenNewWindow"
@@ -450,6 +583,7 @@ function onTreeFolderMenuSelect(key: string) {
             @copy-title="(i: BmItem) => handleCopy(i.title, '标题')"
             @edit="handleEdit"
             @delete="handleDeleteBookmark"
+            @reorder="handleBookmarkReorder"
           />
         </div>
       </main>

@@ -7,6 +7,7 @@ const props = defineProps<{
   items: BmItem[]
   metaOf: (id: string) => BookmarkMeta
   hasFolder: boolean
+  draggable?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   (e: 'copy-title', item: BmItem): void
   (e: 'edit', item: BmItem): void
   (e: 'delete', item: BmItem): void
+  (e: 'reorder', dragId: string, targetId: string, position: 'before' | 'after'): void
 }>()
 
 function favicon(item: BmItem): string {
@@ -50,9 +52,15 @@ const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 const menuTarget = ref<BmItem | null>(null)
+const draggingId = ref<string | null>(null)
+const dragOverId = ref<string | null>(null)
+const dragOverPosition = ref<'before' | 'after' | null>(null)
+const suppressNextClick = ref(false)
+const selectedId = ref<string | null>(null)
 
 function onContextMenu(e: MouseEvent, item: BmItem) {
   e.preventDefault()
+  selectedId.value = item.id
   menuVisible.value = false
   nextTick(() => {
     menuTarget.value = item
@@ -60,6 +68,57 @@ function onContextMenu(e: MouseEvent, item: BmItem) {
     menuY.value = e.clientY
     menuVisible.value = true
   })
+}
+
+function onDragStart(e: DragEvent, item: BmItem) {
+  if (!props.draggable) return
+  draggingId.value = item.id
+  suppressNextClick.value = true
+  e.dataTransfer?.setData('text/plain', item.id)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragOver(e: DragEvent, item: BmItem) {
+  if (!props.draggable || !draggingId.value || draggingId.value === item.id) return
+  e.preventDefault()
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  dragOverId.value = item.id
+  dragOverPosition.value = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+function clearDragState() {
+  draggingId.value = null
+  dragOverId.value = null
+  dragOverPosition.value = null
+}
+
+function onDrop(e: DragEvent, item: BmItem) {
+  if (!props.draggable || !draggingId.value || !dragOverPosition.value) return
+  e.preventDefault()
+  const dragId = draggingId.value
+  const position = dragOverPosition.value
+  clearDragState()
+  if (dragId !== item.id) emit('reorder', dragId, item.id, position)
+}
+
+function onDragLeave(item: BmItem) {
+  if (dragOverId.value !== item.id) return
+  dragOverId.value = null
+  dragOverPosition.value = null
+}
+
+function onItemClick(item: BmItem) {
+  if (suppressNextClick.value) {
+    suppressNextClick.value = false
+    return
+  }
+  selectedId.value = item.id
+}
+
+function onItemDblclick(item: BmItem) {
+  selectedId.value = item.id
+  emit('open', item)
 }
 </script>
 
@@ -81,9 +140,22 @@ function onContextMenu(e: MouseEvent, item: BmItem) {
     <div
       v-for="item in items"
       :key="item.id"
+      :draggable="draggable"
       class="group flex items-center gap-3 px-4 py-3 bg-surface rounded-xl border border-subtle hover:border-strong hover:shadow-sm transition cursor-pointer"
-      @click="emit('open', item)"
+      :class="{
+        'opacity-50': draggingId === item.id,
+        'border-strong shadow-sm bg-subtle': selectedId === item.id,
+        'border-strong shadow-sm': dragOverId === item.id,
+        'ring-2 ring-[var(--accent)] ring-offset-0': dragOverId === item.id && dragOverPosition,
+      }"
+      @click="onItemClick(item)"
+      @dblclick="onItemDblclick(item)"
       @contextmenu="onContextMenu($event, item)"
+      @dragstart="onDragStart($event, item)"
+      @dragover="onDragOver($event, item)"
+      @dragleave="onDragLeave(item)"
+      @drop="onDrop($event, item)"
+      @dragend="clearDragState"
     >
       <div
         class="w-8 h-8 rounded-md bg-subtle flex items-center justify-center overflow-hidden shrink-0"

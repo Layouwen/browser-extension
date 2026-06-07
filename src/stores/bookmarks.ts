@@ -44,10 +44,14 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     loaded.value = false
   }
 
-  const rootFolders = computed(() => folders.value.filter((f) => f.parentId === null))
-  const childrenOf = (id: string | null) => folders.value.filter((f) => f.parentId === id)
+  const rootFolders = computed(() =>
+    folders.value.filter((f) => f.parentId === null).sort((a, b) => a.index - b.index)
+  )
+  const childrenOf = (id: string | null) =>
+    folders.value.filter((f) => f.parentId === id).sort((a, b) => a.index - b.index)
   const folderById = (id: string) => folders.value.find((f) => f.id === id)
-  const itemsOf = (folderId: string) => items.value.filter((b) => b.parentId === folderId)
+  const itemsOf = (folderId: string) =>
+    items.value.filter((b) => b.parentId === folderId).sort((a, b) => a.index - b.index)
   const metaOf = (id: string): BookmarkMeta => metaMap.value[id] ?? { tags: [] }
 
   // ---------- mutations(操作浏览器原生书签) ----------
@@ -60,8 +64,8 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     return bm.rename(id, title.trim() || '未命名')
   }
 
-  async function moveFolder(id: string, newParentId: string) {
-    return bm.move(id, newParentId)
+  async function moveFolder(id: string, newParentId: string, index?: number) {
+    return bm.move(id, newParentId, index)
   }
 
   async function deleteFolder(id: string) {
@@ -131,8 +135,8 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     await meta.deleteMeta([id])
   }
 
-  async function moveBookmark(id: string, parentId: string) {
-    return bm.move(id, parentId)
+  async function moveBookmark(id: string, parentId: string, index?: number) {
+    return bm.move(id, parentId, index)
   }
 
   return {

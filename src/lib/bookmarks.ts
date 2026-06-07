@@ -36,6 +36,7 @@ export async function listAll(): Promise<{ folders: BmFolder[]; items: BmItem[] 
           id: n.id,
           parentId: n.parentId ?? null,
           title: n.title,
+          index: n.index ?? 0,
           dateAdded: n.dateAdded ?? 0,
           dateGroupModified: n.dateGroupModified,
         })
@@ -47,6 +48,7 @@ export async function listAll(): Promise<{ folders: BmFolder[]; items: BmItem[] 
         parentId: n.parentId ?? '',
         title: n.title,
         url: n.url,
+        index: n.index ?? 0,
         dateAdded: n.dateAdded ?? 0,
       })
     }
@@ -78,8 +80,8 @@ export async function updateUrl(id: string, url: string): Promise<void> {
   await chrome.bookmarks.update(id, { url })
 }
 
-export async function move(id: string, parentId: string): Promise<void> {
-  await chrome.bookmarks.move(id, { parentId })
+export async function move(id: string, parentId: string, index?: number): Promise<void> {
+  await chrome.bookmarks.move(id, { parentId, index })
 }
 
 export async function removeNode(id: string, isDir: boolean): Promise<void> {
