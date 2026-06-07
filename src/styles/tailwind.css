@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: 'Inter var';
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  src: url('/src/assets/fonts/InterVariable.woff2') format('woff2-variations'),
+       url('/src/assets/fonts/InterVariable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  src: url('/src/assets/fonts/JetBrainsMono-Variable.woff2') format('woff2-variations'),
+       url('/src/assets/fonts/JetBrainsMono-Variable.woff2') format('woff2');
+}
+
+:root {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont,
+    'SF Pro Display', 'SF Pro Text',
+    'Segoe UI Variable', 'Segoe UI',
+    'Inter var', Inter,
+    Roboto,
+    'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei',
+    'Noto Sans CJK SC', 'Source Han Sans SC',
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono',
+    'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Light theme tokens */
+  --bg-base: #f5f5f7;
+  --bg-elevated: #ffffff;
+  --bg-sidebar: #fbfbfd;
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-active: rgba(0, 0, 0, 0.07);
+  --bg-subtle: rgba(0, 0, 0, 0.035);
+
+  --text-primary: #1d1d1f;
+  --text-secondary: rgba(29, 29, 31, 0.72);
+  --text-tertiary: rgba(29, 29, 31, 0.55);
+  --text-muted: rgba(29, 29, 31, 0.4);
+  --text-disabled: rgba(29, 29, 31, 0.28);
+
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-default: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.18);
+
+  --accent: #0071e3;
+  --danger: #d93025;
+  --danger-bg: rgba(217, 48, 37, 0.08);
+
+  --scrollbar-thumb: rgba(0, 0, 0, 0.18);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.32);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-base: #1c1c1e;
+    --bg-elevated: #2c2c2e;
+    --bg-sidebar: #232325;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --bg-active: rgba(255, 255, 255, 0.1);
+    --bg-subtle: rgba(255, 255, 255, 0.04);
+
+    --text-primary: #f5f5f7;
+    --text-secondary: rgba(245, 245, 247, 0.78);
+    --text-tertiary: rgba(245, 245, 247, 0.6);
+    --text-muted: rgba(245, 245, 247, 0.45);
+    --text-disabled: rgba(245, 245, 247, 0.3);
+
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-default: rgba(255, 255, 255, 0.14);
+    --border-strong: rgba(255, 255, 255, 0.22);
+
+    --accent: #2997ff;
+    --danger: #ff6b6b;
+    --danger-bg: rgba(255, 107, 107, 0.14);
+
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
+  }
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+html, body, #app {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-feature-settings: 'liga' 0, 'calt' 1;
+}
+
+/* 优雅滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* === 语义色 utility（让 Tailwind 类直接消费 CSS 变量） === */
+.bg-app { background-color: var(--bg-base); }
+.bg-surface { background-color: var(--bg-elevated); }
+.bg-sidebar { background-color: var(--bg-sidebar); }
+.bg-subtle { background-color: var(--bg-subtle); }
+.hover\:bg-hover:hover { background-color: var(--bg-hover); }
+.hover\:bg-active:hover { background-color: var(--bg-active); }
+.hover\:bg-danger-soft:hover { background-color: var(--danger-bg); }
+
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-tertiary { color: var(--text-tertiary); }
+.text-muted { color: var(--text-muted); }
+.text-disabled { color: var(--text-disabled); }
+.text-danger { color: var(--danger); }
+.hover\:text-primary:hover { color: var(--text-primary); }
+
+.border-subtle { border-color: var(--border-subtle); }
+.border-default { border-color: var(--border-default); }
+.hover\:border-default:hover { border-color: var(--border-default); }
+.hover\:border-strong:hover { border-color: var(--border-strong); }
+
+/* === naive-ui 主题相关样式由 themeOverrides 在 Options.vue / Popup.vue 处理 === */
