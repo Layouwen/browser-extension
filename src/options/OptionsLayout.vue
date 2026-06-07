@@ -5,12 +5,14 @@ import {
   useDialog,
   NIcon,
   NInput,
+  type UploadCustomRequestOptions,
   type DropdownOption,
   type TreeOption,
 } from 'naive-ui'
 import { useBookmarksStore } from '@/stores/bookmarks'
 import type { BmFolder, BmItem } from '@/lib/types'
 import { BOOKMARKS_BAR_ID } from '@/lib/types'
+import { exportCustomMeta, importCustomMeta } from '@/lib/meta'
 import FolderTree from '@/components/FolderTree.vue'
 import BookmarkList from '@/components/BookmarkList.vue'
 import type { BookmarkListNode } from '@/components/BookmarkList.vue'
@@ -26,6 +28,7 @@ const dialog = useDialog()
 const selectedKey = ref<string | null>(null)
 const selectedFolderId = ref<string | null>(null)
 const expandedKeys = ref<string[]>([])
+const activeView = ref<'bookmarks' | 'settings'>('bookmarks')
 const searchKeyword = ref('')
 const editing = ref<BmItem | null>(null)
 const editorVisible = ref(false)
@@ -672,6 +675,81 @@ function onTreeFolderMenuSelect(key: string) {
       break
   }
 }
+
+function exportFilename(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+  ].join('') + '-' + [pad(now.getHours()), pad(now.getMinutes()), pad(now.getSeconds())].join('')
+  return `bookmark-custom-meta-${stamp}.json`
+}
+
+function downloadJson(data: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: 'application/json;charset=utf-8',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function handleExportCustomMeta() {
+  try {
+    const data = await exportCustomMeta()
+    downloadJson(data, exportFilename())
+    message.success('已导出标签和备注')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '导出失败')
+  }
+}
+
+function confirmImportCustomMeta(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let resolved = false
+    dialog.warning({
+      title: '导入标签和备注?',
+      content: '将覆盖导入文件中对应书签的标签和备注,未包含的书签不会受影响。',
+      positiveText: '导入',
+      negativeText: '取消',
+      onPositiveClick: () => {
+        resolved = true
+        resolve(true)
+      },
+      onNegativeClick: () => {
+        resolved = true
+        resolve(false)
+      },
+      onClose: () => {
+        if (!resolved) resolve(false)
+      },
+    })
+  })
+}
+
+async function handleImportCustomMeta(options: UploadCustomRequestOptions) {
+  try {
+    const file = options.file.file
+    if (!file) throw new Error('请选择 JSON 文件')
+    const confirmed = await confirmImportCustomMeta()
+    if (!confirmed) {
+      options.onFinish()
+      return
+    }
+    const parsed = JSON.parse(await file.text())
+    const count = await importCustomMeta(parsed)
+    message.success(`已导入 ${count} 条标签和备注`)
+    options.onFinish()
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '导入失败')
+    options.onError()
+  }
+}
 </script>
 
 <template>
@@ -695,94 +773,104 @@ function onTreeFolderMenuSelect(key: string) {
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <n-input
-          v-model:value="searchKeyword"
-          placeholder="搜索标题、链接、备注或标签"
-          clearable
-          size="small"
-          style="width: 320px"
-        />
-        <n-popover trigger="click" placement="bottom-end" :width="300">
-          <template #trigger>
-            <n-button size="small" :type="activeFilterCount > 0 ? 'primary' : 'default'">
-              筛选{{ activeFilterCount > 0 ? ` ${activeFilterCount}` : '' }}
-            </n-button>
-          </template>
-          <div class="flex flex-col gap-4">
-            <div>
-              <div class="text-[12px] text-tertiary mb-2 font-medium">范围</div>
-              <n-radio-group
-                v-model:value="filterScope"
-                size="small"
-              >
-                <n-radio-button value="current">
-                  当前目录
-                </n-radio-button>
-                <n-radio-button value="all">
-                  全部收藏
-                </n-radio-button>
-              </n-radio-group>
-            </div>
-            <div>
-              <div class="text-[12px] text-tertiary mb-2 font-medium">类型</div>
-              <n-radio-group
-                v-model:value="filterType"
-                size="small"
-              >
-                <n-radio-button value="all">
-                  全部
-                </n-radio-button>
-                <n-radio-button value="folder">
-                  目录
-                </n-radio-button>
-                <n-radio-button value="bookmark">
-                  收藏
-                </n-radio-button>
-              </n-radio-group>
-            </div>
-            <div>
-              <div class="text-[12px] text-tertiary mb-2 font-medium">添加时间</div>
-              <n-radio-group
-                v-model:value="filterTime"
-                size="small"
-              >
-                <n-radio-button value="all">
-                  全部
-                </n-radio-button>
-                <n-radio-button value="today">
-                  今天
-                </n-radio-button>
-                <n-radio-button value="7d">
-                  7 天
-                </n-radio-button>
-                <n-radio-button value="30d">
-                  30 天
-                </n-radio-button>
-              </n-radio-group>
-            </div>
-            <div>
-              <div class="text-[12px] text-tertiary mb-2 font-medium">标签</div>
-              <n-select
-                v-model:value="filterTags"
-                :options="filterTagOptions"
-                multiple
-                filterable
-                clearable
-                placeholder="选择标签"
-                size="small"
-              />
-            </div>
-            <div class="flex justify-end">
-              <n-button size="small" quaternary :disabled="!hasActiveFilters" @click="resetFilters">
-                重置
+        <n-radio-group v-model:value="activeView" size="small">
+          <n-radio-button value="bookmarks">
+            收藏管理
+          </n-radio-button>
+          <n-radio-button value="settings">
+            配置
+          </n-radio-button>
+        </n-radio-group>
+        <template v-if="activeView === 'bookmarks'">
+          <n-input
+            v-model:value="searchKeyword"
+            placeholder="搜索标题、链接、备注或标签"
+            clearable
+            size="small"
+            style="width: 320px"
+          />
+          <n-popover trigger="click" placement="bottom-end" :width="300">
+            <template #trigger>
+              <n-button size="small" :type="activeFilterCount > 0 ? 'primary' : 'default'">
+                筛选{{ activeFilterCount > 0 ? ` ${activeFilterCount}` : '' }}
               </n-button>
+            </template>
+            <div class="flex flex-col gap-4">
+              <div>
+                <div class="text-[12px] text-tertiary mb-2 font-medium">范围</div>
+                <n-radio-group
+                  v-model:value="filterScope"
+                  size="small"
+                >
+                  <n-radio-button value="current">
+                    当前目录
+                  </n-radio-button>
+                  <n-radio-button value="all">
+                    全部收藏
+                  </n-radio-button>
+                </n-radio-group>
+              </div>
+              <div>
+                <div class="text-[12px] text-tertiary mb-2 font-medium">类型</div>
+                <n-radio-group
+                  v-model:value="filterType"
+                  size="small"
+                >
+                  <n-radio-button value="all">
+                    全部
+                  </n-radio-button>
+                  <n-radio-button value="folder">
+                    目录
+                  </n-radio-button>
+                  <n-radio-button value="bookmark">
+                    收藏
+                  </n-radio-button>
+                </n-radio-group>
+              </div>
+              <div>
+                <div class="text-[12px] text-tertiary mb-2 font-medium">添加时间</div>
+                <n-radio-group
+                  v-model:value="filterTime"
+                  size="small"
+                >
+                  <n-radio-button value="all">
+                    全部
+                  </n-radio-button>
+                  <n-radio-button value="today">
+                    今天
+                  </n-radio-button>
+                  <n-radio-button value="7d">
+                    7 天
+                  </n-radio-button>
+                  <n-radio-button value="30d">
+                    30 天
+                  </n-radio-button>
+                </n-radio-group>
+              </div>
+              <div>
+                <div class="text-[12px] text-tertiary mb-2 font-medium">标签</div>
+                <n-select
+                  v-model:value="filterTags"
+                  :options="filterTagOptions"
+                  multiple
+                  filterable
+                  clearable
+                  placeholder="选择标签"
+                  size="small"
+                />
+              </div>
+              <div class="flex justify-end">
+                <n-button size="small" quaternary :disabled="!hasActiveFilters" @click="resetFilters">
+                  重置
+                </n-button>
+              </div>
             </div>
-          </div>
-        </n-popover>
+          </n-popover>
+        </template>
       </div>
     </header>
 
-    <div class="flex flex-1 overflow-hidden">
+    <div v-if="activeView === 'bookmarks'" class="flex flex-1 overflow-hidden">
       <aside class="w-64 shrink-0 border-r border-subtle bg-sidebar flex flex-col">
         <FolderTree
           :data="treeData"
@@ -839,6 +927,46 @@ function onTreeFolderMenuSelect(key: string) {
         </div>
       </main>
     </div>
+
+    <main v-else class="flex-1 overflow-auto bg-app">
+      <div class="max-w-3xl mx-auto px-8 py-8">
+        <div class="mb-6">
+          <div class="text-[11px] uppercase tracking-wider text-muted mb-1 font-semibold">
+            自定义数据
+          </div>
+          <h2 class="text-[28px] leading-tight font-semibold tracking-tight m-0">
+            配置
+          </h2>
+        </div>
+
+        <section class="border border-subtle bg-surface rounded-lg p-5">
+          <div class="flex items-start justify-between gap-6">
+            <div>
+              <h3 class="text-[16px] leading-tight font-semibold m-0 mb-2">
+                标签和备注
+              </h3>
+              <p class="text-sm text-secondary leading-6 m-0">
+                导出或导入插件保存在浏览器外的自定义标签和备注。导入会按收藏 id 覆盖文件中包含的项目,不会改动未包含的收藏。
+              </p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <n-button size="small" type="primary" @click="handleExportCustomMeta">
+                导出标签和备注
+              </n-button>
+              <n-upload
+                accept=".json,application/json"
+                :show-file-list="false"
+                :custom-request="handleImportCustomMeta"
+              >
+                <n-button size="small">
+                  导入标签和备注
+                </n-button>
+              </n-upload>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
 
     <BookmarkEditDialog v-model:show="editorVisible" :item="editing" />
 
