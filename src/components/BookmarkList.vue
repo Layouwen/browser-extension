@@ -227,6 +227,18 @@ function onItemDblclick(node: BookmarkListNode) {
           >
             {{ metaOf(node.item.id).note }}
           </div>
+          <div
+            v-if="metaOf(node.item.id).tags.length > 0"
+            class="flex flex-wrap gap-1 mt-1.5"
+          >
+            <span
+              v-for="tag in metaOf(node.item.id).tags"
+              :key="tag"
+              class="px-1.5 py-0.5 rounded bg-subtle text-[11px] leading-tight text-secondary border border-subtle"
+            >
+              {{ tag }}
+            </span>
+          </div>
         </template>
       </div>
 

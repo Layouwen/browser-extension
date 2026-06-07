@@ -18,6 +18,7 @@ const message = useMessage()
 const title = ref('')
 const url = ref('')
 const note = ref('')
+const tags = ref<string[]>([])
 const parentId = ref<string | null>(null)
 const saving = ref(false)
 
@@ -29,6 +30,7 @@ watch(
       url.value = props.item.url
       const m = store.metaOf(props.item.id)
       note.value = m.note ?? ''
+      tags.value = [...(m.tags ?? [])]
       parentId.value = props.item.parentId
     }
   },
@@ -43,6 +45,16 @@ const buildTree = (pid: string | null): TreeSelectOption[] =>
   }))
 
 const folderOptions = computed(() => buildTree(null))
+const tagOptions = computed(() =>
+  store.allTagNames.map((name) => ({
+    label: name,
+    value: name,
+  }))
+)
+
+function normalizedTags(): string[] {
+  return Array.from(new Set(tags.value.map((tag) => tag.trim()).filter(Boolean)))
+}
 
 async function handleSave() {
   if (!props.item) return
@@ -61,6 +73,7 @@ async function handleSave() {
       url: url.value,
       parentId: parentId.value,
       note: note.value,
+      tags: normalizedTags(),
     })
     message.success('已保存')
     emit('update:show', false)
@@ -110,6 +123,17 @@ function handleCancel() {
           type="textarea"
           placeholder="添加备注..."
           :autosize="{ minRows: 2, maxRows: 5 }"
+        />
+      </div>
+      <div>
+        <div class="text-[12px] text-tertiary mb-1.5 font-medium">标签(可选)</div>
+        <n-select
+          v-model:value="tags"
+          :options="tagOptions"
+          multiple
+          filterable
+          tag
+          placeholder="选择或输入标签"
         />
       </div>
     </div>

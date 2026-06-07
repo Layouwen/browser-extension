@@ -12,6 +12,7 @@ const tabUrl = ref('')
 const tabFavicon = ref<string | undefined>(undefined)
 const parentId = ref<string | null>(null)
 const note = ref('')
+const tags = ref<string[]>([])
 const saving = ref(false)
 const ready = ref(false)
 
@@ -41,10 +42,20 @@ const buildTree = (pid: string | null): TreeSelectOption[] =>
   }))
 
 const folderOptions = computed(() => buildTree(null))
+const tagOptions = computed(() =>
+  store.allTagNames.map((name) => ({
+    label: name,
+    value: name,
+  }))
+)
 
 const canSave = computed(
   () => !!tabUrl.value && !!parentId.value && !!tabTitle.value.trim()
 )
+
+function normalizedTags(): string[] {
+  return Array.from(new Set(tags.value.map((tag) => tag.trim()).filter(Boolean)))
+}
 
 async function save() {
   if (!canSave.value || !parentId.value) return
@@ -56,6 +67,7 @@ async function save() {
       url: tabUrl.value,
       favicon: tabFavicon.value,
       note: note.value,
+      tags: normalizedTags(),
     })
     await chrome.storage.local.set({ 'last-folder-id': parentId.value })
     message.success('已加入 Chrome 收藏夹')
@@ -119,6 +131,19 @@ function openOptions() {
           type="textarea"
           placeholder="加点笔记..."
           :autosize="{ minRows: 2, maxRows: 3 }"
+          size="small"
+        />
+      </div>
+
+      <div>
+        <div class="text-[11px] text-tertiary mb-1 font-medium">标签(可选)</div>
+        <n-select
+          v-model:value="tags"
+          :options="tagOptions"
+          multiple
+          filterable
+          tag
+          placeholder="选择或输入标签"
           size="small"
         />
       </div>

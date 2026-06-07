@@ -75,6 +75,16 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
       })),
   ].sort((a, b) => a.index - b.index)
   const metaOf = (id: string): BookmarkMeta => metaMap.value[id] ?? { tags: [] }
+  const allTagNames = computed(() =>
+    Array.from(
+      new Set(
+        Object.values(metaMap.value)
+          .flatMap((m) => m.tags ?? [])
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  )
 
   // ---------- mutations(操作浏览器原生书签) ----------
 
@@ -183,6 +193,7 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     itemsOf,
     siblingsOf,
     metaOf,
+    allTagNames,
     addFolder,
     renameFolder,
     moveFolder,

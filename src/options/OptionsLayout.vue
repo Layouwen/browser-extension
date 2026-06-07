@@ -29,11 +29,18 @@ const expandedKeys = ref<string[]>([])
 const searchKeyword = ref('')
 const editing = ref<BmItem | null>(null)
 const editorVisible = ref(false)
+const filterScope = ref<'current' | 'all'>('current')
+const filterType = ref<'all' | 'folder' | 'bookmark'>('all')
+const filterTime = ref<'all' | 'today' | '7d' | '30d'>('all')
+const filterTags = ref<string[]>([])
 
 type DropPosition = 'before' | 'inside' | 'after'
 type BookmarkNodeRef =
   | { kind: 'folder'; id: string; parentId: string | null; index: number }
   | { kind: 'bookmark'; id: string; parentId: string; index: number }
+type FilterableNode =
+  | { kind: 'folder'; id: string; folder: BmFolder }
+  | { kind: 'bookmark'; id: string; item: BmItem }
 
 onMounted(() => store.init())
 
@@ -112,49 +119,145 @@ const isProtectedRoot = computed(
   () => !!currentFolder.value && currentFolder.value.parentId === null
 )
 
-const visibleItems = computed<BmItem[]>(() => {
-  const kw = searchKeyword.value.trim().toLowerCase()
-  if (!kw) return []
-  return store.items
-    .filter((b) => {
-      const m = store.metaOf(b.id)
-      return (
-        b.title.toLowerCase().includes(kw) ||
-        b.url.toLowerCase().includes(kw) ||
-        (m.note ?? '').toLowerCase().includes(kw)
-      )
-    })
-    .sort((a, b) => b.dateAdded - a.dateAdded)
+const filterTagOptions = computed(() =>
+  store.allTagNames.map((name) => ({
+    label: name,
+    value: name,
+  }))
+)
+
+const hasActiveFilters = computed(
+  () =>
+    filterScope.value !== 'current' ||
+    filterType.value !== 'all' ||
+    filterTime.value !== 'all' ||
+    filterTags.value.length > 0
+)
+
+const hasActiveQuery = computed(
+  () => searchKeyword.value.trim() !== '' || hasActiveFilters.value
+)
+
+const activeFilterCount = computed(
+  () =>
+    Number(filterScope.value !== 'current') +
+    Number(filterType.value !== 'all') +
+    Number(filterTime.value !== 'all') +
+    filterTags.value.length
+)
+
+const resultKicker = computed(() => {
+  if (!hasActiveQuery.value) return breadcrumbs.value.join(' › ') || '未选择目录'
+  return filterScope.value === 'all' ? '全部收藏筛选结果' : '当前目录筛选结果'
 })
 
+function resetFilters() {
+  filterScope.value = 'current'
+  filterType.value = 'all'
+  filterTime.value = 'all'
+  filterTags.value = []
+}
+
+function timeCutoff(): number | null {
+  const now = new Date()
+  if (filterTime.value === 'today') {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  }
+  if (filterTime.value === '7d') return now.getTime() - 7 * 24 * 60 * 60 * 1000
+  if (filterTime.value === '30d') return now.getTime() - 30 * 24 * 60 * 60 * 1000
+  return null
+}
+
+function bookmarkMatchesText(item: BmItem, kw: string): boolean {
+  if (!kw) return true
+  const m = store.metaOf(item.id)
+  return (
+    item.title.toLowerCase().includes(kw) ||
+    item.url.toLowerCase().includes(kw) ||
+    (m.note ?? '').toLowerCase().includes(kw) ||
+    (m.tags ?? []).some((tag) => tag.toLowerCase().includes(kw))
+  )
+}
+
+function folderMatchesText(folder: BmFolder, kw: string): boolean {
+  return !kw || folder.title.toLowerCase().includes(kw)
+}
+
+function matchesTime(dateAdded: number): boolean {
+  const cutoff = timeCutoff()
+  return cutoff === null || dateAdded >= cutoff
+}
+
+function matchesSelectedTags(item: BmItem): boolean {
+  if (filterTags.value.length === 0) return true
+  const tags = store.metaOf(item.id).tags ?? []
+  return filterTags.value.some((tag) => tags.includes(tag))
+}
+
+function nodeMatchesFilters(node: FilterableNode): boolean {
+  const kw = searchKeyword.value.trim().toLowerCase()
+  if (node.kind === 'folder') {
+    return (
+      filterTags.value.length === 0 &&
+      filterType.value !== 'bookmark' &&
+      matchesTime(node.folder.dateAdded) &&
+      folderMatchesText(node.folder, kw)
+    )
+  }
+  return (
+    filterType.value !== 'folder' &&
+    matchesTime(node.item.dateAdded) &&
+    matchesSelectedTags(node.item) &&
+    bookmarkMatchesText(node.item, kw)
+  )
+}
+
+function listNodeFromFilterable(node: FilterableNode): BookmarkListNode {
+  if (node.kind === 'folder') {
+    return {
+      kind: 'folder',
+      id: node.folder.id,
+      folder: node.folder,
+      childCount: store.siblingsOf(node.folder.id).length,
+    }
+  }
+  return { kind: 'bookmark', id: node.item.id, item: node.item }
+}
+
 const visibleNodes = computed<BookmarkListNode[]>(() => {
-  const kw = searchKeyword.value.trim()
-  if (kw) {
-    return visibleItems.value.map((item) => ({
-      kind: 'bookmark',
-      id: item.id,
-      item,
-    }))
+  if (filterScope.value === 'all' && hasActiveQuery.value) {
+    const folders =
+      filterTags.value.length === 0 && filterType.value !== 'bookmark'
+        ? store.folders.map((folder): FilterableNode => ({ kind: 'folder', id: folder.id, folder }))
+        : []
+    const bookmarks =
+      filterType.value === 'folder'
+        ? []
+        : store.items.map((item): FilterableNode => ({ kind: 'bookmark', id: item.id, item }))
+    return [...folders, ...bookmarks]
+      .filter(nodeMatchesFilters)
+      .sort((a, b) => {
+        const aDate = a.kind === 'folder' ? a.folder.dateAdded : a.item.dateAdded
+        const bDate = b.kind === 'folder' ? b.folder.dateAdded : b.item.dateAdded
+        return bDate - aDate
+      })
+      .map(listNodeFromFilterable)
   }
   if (!selectedFolderId.value) return []
-  return store.siblingsOf(selectedFolderId.value).flatMap<BookmarkListNode>((node) => {
+  const nodes = store.siblingsOf(selectedFolderId.value).flatMap<FilterableNode>((node) => {
     if (node.kind === 'folder') {
       const folder = store.folderById(node.id)
       if (!folder) return []
-      return [{
-        kind: 'folder' as const,
-        id: folder.id,
-        folder,
-        childCount: store.siblingsOf(folder.id).length,
-      }]
+      return [{ kind: 'folder' as const, id: folder.id, folder }]
     }
     const item = store.items.find((b) => b.id === node.id)
     return item ? [{ kind: 'bookmark' as const, id: item.id, item }] : []
   })
+  return (hasActiveQuery.value ? nodes.filter(nodeMatchesFilters) : nodes).map(listNodeFromFilterable)
 })
 
 const canReorderVisibleItems = computed(
-  () => !!selectedFolderId.value && searchKeyword.value.trim() === ''
+  () => !!selectedFolderId.value && !hasActiveQuery.value
 )
 
 const breadcrumbs = computed(() => {
@@ -591,13 +694,92 @@ function onTreeFolderMenuSelect(key: string) {
           </div>
         </div>
       </div>
-      <n-input
-        v-model:value="searchKeyword"
-        placeholder="搜索标题、链接或备注"
-        clearable
-        size="small"
-        style="width: 320px"
-      />
+      <div class="flex items-center gap-2">
+        <n-input
+          v-model:value="searchKeyword"
+          placeholder="搜索标题、链接、备注或标签"
+          clearable
+          size="small"
+          style="width: 320px"
+        />
+        <n-popover trigger="click" placement="bottom-end" :width="300">
+          <template #trigger>
+            <n-button size="small" :type="activeFilterCount > 0 ? 'primary' : 'default'">
+              筛选{{ activeFilterCount > 0 ? ` ${activeFilterCount}` : '' }}
+            </n-button>
+          </template>
+          <div class="flex flex-col gap-4">
+            <div>
+              <div class="text-[12px] text-tertiary mb-2 font-medium">范围</div>
+              <n-radio-group
+                v-model:value="filterScope"
+                size="small"
+              >
+                <n-radio-button value="current">
+                  当前目录
+                </n-radio-button>
+                <n-radio-button value="all">
+                  全部收藏
+                </n-radio-button>
+              </n-radio-group>
+            </div>
+            <div>
+              <div class="text-[12px] text-tertiary mb-2 font-medium">类型</div>
+              <n-radio-group
+                v-model:value="filterType"
+                size="small"
+              >
+                <n-radio-button value="all">
+                  全部
+                </n-radio-button>
+                <n-radio-button value="folder">
+                  目录
+                </n-radio-button>
+                <n-radio-button value="bookmark">
+                  收藏
+                </n-radio-button>
+              </n-radio-group>
+            </div>
+            <div>
+              <div class="text-[12px] text-tertiary mb-2 font-medium">添加时间</div>
+              <n-radio-group
+                v-model:value="filterTime"
+                size="small"
+              >
+                <n-radio-button value="all">
+                  全部
+                </n-radio-button>
+                <n-radio-button value="today">
+                  今天
+                </n-radio-button>
+                <n-radio-button value="7d">
+                  7 天
+                </n-radio-button>
+                <n-radio-button value="30d">
+                  30 天
+                </n-radio-button>
+              </n-radio-group>
+            </div>
+            <div>
+              <div class="text-[12px] text-tertiary mb-2 font-medium">标签</div>
+              <n-select
+                v-model:value="filterTags"
+                :options="filterTagOptions"
+                multiple
+                filterable
+                clearable
+                placeholder="选择标签"
+                size="small"
+              />
+            </div>
+            <div class="flex justify-end">
+              <n-button size="small" quaternary :disabled="!hasActiveFilters" @click="resetFilters">
+                重置
+              </n-button>
+            </div>
+          </div>
+        </n-popover>
+      </div>
     </header>
 
     <div class="flex flex-1 overflow-hidden">
@@ -624,11 +806,11 @@ function onTreeFolderMenuSelect(key: string) {
           <div class="mb-6 flex items-end justify-between">
             <div>
               <div class="text-[11px] uppercase tracking-wider text-muted mb-1 font-semibold">
-                {{ searchKeyword ? '搜索结果' : breadcrumbs.join(' › ') || '未选择目录' }}
+                {{ resultKicker }}
               </div>
               <h2 class="text-[28px] leading-tight font-semibold tracking-tight m-0">
                 {{
-                  searchKeyword
+                  hasActiveQuery
                     ? `匹配 ${visibleNodes.length} 项`
                     : currentFolder?.title ?? '请选择一个目录'
                 }}
@@ -640,9 +822,9 @@ function onTreeFolderMenuSelect(key: string) {
           <BookmarkList
             :nodes="visibleNodes"
             :meta-of="store.metaOf"
-            :has-folder="!!currentFolder"
+            :has-folder="!!currentFolder || hasActiveQuery"
             :draggable="canReorderVisibleItems"
-            :search-mode="!!searchKeyword.trim()"
+            :search-mode="hasActiveQuery"
             @open="handleOpen"
             @open-new-tab="handleOpenNewTab"
             @open-new-window="handleOpenNewWindow"
